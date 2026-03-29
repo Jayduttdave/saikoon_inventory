@@ -23,21 +23,36 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-      return fetch(event.request)
-        .then((response) => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
+  const requestUrl = new URL(event.request.url);
+  const isSameOrigin = requestUrl.origin === self.location.origin;
+  const isStaticAsset = requestUrl.pathname === '/' || requestUrl.pathname === '/sw.js' || requestUrl.pathname.startsWith('/static/') || requestUrl.pathname.startsWith('/images/');
+
+  if (!isSameOrigin) {
+    return;
+  }
+
+  if (isStaticAsset) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) {
+          return cached;
+        }
+        return fetch(event.request).then((response) => {
           return caches.open(CACHE_NAME).then((cache) => {
-            if (event.request.method === 'GET') {
-              cache.put(event.request, response.clone());
-            }
+            cache.put(event.request, response.clone());
             return response;
           });
-        })
-        .catch(() => caches.match('/'));
-    })
+        });
+      })
+    );
+    return;
+  }
+
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request))
   );
 });

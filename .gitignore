@@ -28,3 +28,7 @@ build/
 # Flask
 instance/
 .webassets-cache
+
+orders/
+*.pdf
+orders.db
