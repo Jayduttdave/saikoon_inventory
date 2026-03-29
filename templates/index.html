@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Saikoon Kitchen System</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('serve_image', filename='logo.png') }}">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Saikoon Kitchen">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-bar">
+      <div class="app-brand">
+        <img class="app-logo" src="{{ url_for('serve_image', filename='logo.png') }}" alt="Saikoon logo">
+        <div>
+          <p class="brand">Saikoon Kitchen System</p>
+          <p class="subtitle">Order management for kitchen and owner dashboard</p>
+        </div>
+      </div>
+      <div class="status-chip">Web mode</div>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h1>Kitchen Orders</h1>
+            <p class="hint">Choose supplier, search products, then enter quantities.</p>
+          </div>
+        </div>
+
+        <div class="panel-controls">
+          <select id="supplierSelect"></select>
+          <input id="productSearch" type="search" placeholder="Rechercher un produit..." autocomplete="off">
+        </div>
+
+        <div id="productList" class="list-pane"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <h1>Owner Dashboard</h1>
+            <p class="hint">Live order summary, search and PDF export.</p>
+          </div>
+          <button id="downloadPdf" class="primary-button">Télécharger PDF</button>
+        </div>
+
+        <div class="panel-controls">
+          <input id="ownerSearch" type="search" placeholder="Rechercher commande..." autocomplete="off">
+        </div>
+
+        <div id="orderList" class="list-pane"></div>
+
+        <div class="panel-actions">
+          <button id="clearOrders" class="secondary-button">Effacer les commandes</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const suppliers = {{ suppliers|tojson|safe }};
+    const supplierSelect = document.getElementById('supplierSelect');
+    const productSearch = document.getElementById('productSearch');
+    const ownerSearch = document.getElementById('ownerSearch');
+    const productList = document.getElementById('productList');
+    const orderList = document.getElementById('orderList');
+    const downloadPdf = document.getElementById('downloadPdf');
+    const clearOrders = document.getElementById('clearOrders');
+
+    let activeSupplier = suppliers[0] || '';
+    let ordersCache = [];
+
+    function createElement(tag, options = {}) {
+      const el = document.createElement(tag);
+      if (options.className) el.className = options.className;
+      if (options.text) el.textContent = options.text;
+      if (options.html) el.innerHTML = options.html;
+      if (options.attrs) {
+        Object.entries(options.attrs).forEach(([key, value]) => el.setAttribute(key, value));
+      }
+      return el;
+    }
+
+    function renderSuppliers() {
+      supplierSelect.innerHTML = '';
+      suppliers.forEach((name) => {
+        const option = createElement('option', { text: name, attrs: { value: name } });
+        supplierSelect.appendChild(option);
+      });
+    }
+
+    async function fetchProducts() {
+      const query = productSearch.value.trim();
+      const url = `/api/products?supplier=${encodeURIComponent(activeSupplier)}&query=${encodeURIComponent(query)}`;
+      const response = await fetch(url);
+      return response.ok ? response.json() : [];
+    }
+
+    async function fetchOrders() {
+      const response = await fetch('/api/owner_orders');
+      return response.ok ? response.json() : [];
+    }
+
+    async function refreshProducts() {
+      productList.innerHTML = '<div class="loading-card">Chargement des produits...</div>';
+      const products = await fetchProducts();
+      productList.innerHTML = ''; 
+      if (!products.length) {
+        productList.innerHTML = '<div class="empty-state">Aucun produit trouvé.</div>';
+        return;
+      }
+
+      for (const product of products) {
+        const card = createElement('div', { className: 'item-card' });
+
+        const imageWrapper = createElement('div', { className: 'item-avatar' });
+        const image = createElement('img', { attrs: { src: product.image, alt: product.name } });
+        imageWrapper.appendChild(image);
+
+        const content = createElement('div', { className: 'item-content' });
+        content.appendChild(createElement('div', { className: 'item-title', text: product.name }));
+        content.appendChild(createElement('div', { className: 'item-subtitle', text: `Commande actuelle : ${product.qty}` }));
+
+        const control = createElement('div', { className: 'item-control' });
+        const qtyInput = createElement('input', { attrs: { type: 'number', min: '0', value: product.qty, 'data-product': product.name } });
+        qtyInput.className = 'qty-input';
+        qtyInput.addEventListener('change', () => updateOrder(product.name, qtyInput.value));
+
+        control.appendChild(qtyInput);
+        card.append(imageWrapper, content, control);
+        productList.appendChild(card);
+      }
+    }
+
+    async function refreshOrders() {
+      orderList.innerHTML = '<div class="loading-card">Chargement des commandes...</div>';
+      ordersCache = await fetchOrders();
+      renderOrderCards();
+    }
+
+    function renderOrderCards() {
+      const query = ownerSearch.value.trim().toLowerCase();
+      const filtered = ordersCache.filter((order) => !query || order.product.toLowerCase().includes(query) || order.supplier.toLowerCase().includes(query));
+      orderList.innerHTML = '';
+      if (!filtered.length) {
+        orderList.innerHTML = '<div class="empty-state">Aucune commande correspondante.</div>';
+        return;
+      }
+
+      const grouped = {};
+      for (const order of filtered) {
+        grouped[order.supplier] = grouped[order.supplier] || [];
+        grouped[order.supplier].push(order);
+      }
+
+      for (const [supplier, items] of Object.entries(grouped)) {
+        const card = createElement('div', { className: 'owner-card' });
+        card.appendChild(createElement('div', { className: 'owner-card-title', text: supplier }));
+
+        for (const item of items) {
+          const row = createElement('div', { className: 'owner-row' });
+          const image = createElement('img', { attrs: { src: item.image, alt: item.product } });
+          const label = createElement('div', { className: 'owner-text', text: item.product });
+          const qty = createElement('div', { className: 'owner-qty', text: item.qty });
+          row.append(image, label, qty);
+          card.appendChild(row);
+        }
+
+        orderList.appendChild(card);
+      }
+    }
+
+    async function updateOrder(product, qtyValue) {
+      const quantity = Number(qtyInputValue(qtyValue));
+      await fetch('/api/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier: activeSupplier, product, qty: quantity }),
+      });
+      refreshOrders();
+    }
+
+    function qtyInputValue(value) {
+      const number = parseInt(value, 10);
+      return Number.isNaN(number) || number < 0 ? 0 : number;
+    }
+
+    supplierSelect.addEventListener('change', async (event) => {
+      activeSupplier = event.target.value;
+      await refreshProducts();
+    });
+
+    productSearch.addEventListener('input', debounce(refreshProducts, 250));
+    ownerSearch.addEventListener('input', renderOrderCards);
+
+    downloadPdf.addEventListener('click', async () => {
+      try {
+        const response = await fetch('/download_pdf');
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error || 'Download failed');
+        }
+
+        const blob = await response.blob();
+        const disposition = response.headers.get('Content-Disposition') || '';
+        let filename = 'orders.pdf';
+        const match = disposition.match(/filename=(?:"?)([^";]+)/);
+        if (match) {
+          filename = match[1].replace(/['"]/g, '');
+        }
+
+        const url = URL.createObjectURL(blob);
+        const a = createElement('a', { attrs: { href: url, download: filename } });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        alert('Impossible de télécharger le PDF. Essayez depuis Safari si vous êtes en mode application.');
+      }
+    });
+
+    clearOrders.addEventListener('click', async () => {
+      await fetch('/api/clear_orders', { method: 'POST' });
+      await refreshOrders();
+      await refreshProducts();
+    });
+
+    function debounce(fn, delay) {
+      let timeout;
+      return (...args) => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn.apply(this, args), delay);
+      };
+    }
+
+    async function init() {
+      renderSuppliers();
+      supplierSelect.value = activeSupplier;
+      await refreshProducts();
+      await refreshOrders();
+      setInterval(refreshOrders, 3000);
+    }
+
+    init();
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js');
+      });
+    }
+  </script>
+</body>
+</html>
