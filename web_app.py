@@ -19,6 +19,7 @@ IMAGE_DIRS = [
     os.path.join(BASE_DIR, "images"),
     os.path.join(BASE_DIR, "assets", "images"),
 ]
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 app = Flask(
     __name__,
@@ -62,32 +63,54 @@ def serve_image(filename):
 
 @app.route("/sw.js")
 def service_worker():
-    return send_from_directory(app.static_folder, 'sw.js')
+    return send_from_directory(app.static_folder, "sw.js")
 
 
 @app.route("/api/products")
 def api_products():
     supplier = request.args.get("supplier", "")
     query = request.args.get("query", "").strip().lower()
+
     items = suppliers.get(supplier, [])
+    custom_products = {
+        cp["product"]: cp["image_filename"]
+        for cp in db.get_custom_products(supplier)
+    }
 
     all_orders = {
-        (row[0], row[1]): row[2]
+        (row[0], row[1]): (row[2], row[3] or "Pièce")
         for row in db.all()
     }
 
-    products = [
-        {
-            "name": product,
-            "image": url_for(
+    products = []
+    seen = set()
+    for product in items + list(custom_products.keys()):
+        if product in seen:
+            continue
+        seen.add(product)
+
+        if query and query not in product.lower():
+            continue
+
+        qty, unit = all_orders.get((supplier, product), (0, "Pièce"))
+        image_filename = custom_products.get(product)
+
+        if image_filename:
+            image_url = url_for("serve_image", filename=image_filename)
+        else:
+            image_url = url_for(
                 "serve_image",
                 filename=normalize_name(product) + ".png",
-            ),
-            "qty": all_orders.get((supplier, product), 0),
-        }
-        for product in items
-        if not query or query in product.lower()
-    ]
+            )
+
+        products.append(
+            {
+                "name": product,
+                "image": image_url,
+                "qty": qty,
+                "unit": unit,
+            }
+        )
 
     return jsonify(products)
 
@@ -98,39 +121,103 @@ def api_order():
     supplier = data.get("supplier", "")
     product = data.get("product", "")
     qty = data.get("qty", 0)
+    unit = data.get("unit", "Pièce")
+
+    if not supplier or not product:
+        return jsonify({"error": "Fournisseur et produit requis."}), 400
 
     try:
         qty = int(qty)
     except (ValueError, TypeError):
         qty = 0
 
-    db.upsert(supplier, product, qty)
+    if unit not in ["Carton", "Pièce"]:
+        unit = "Pièce"
+
+    db.upsert(supplier, product, max(0, qty), unit)
 
     return jsonify({"success": True})
 
 
 @app.route("/api/owner_orders")
 def api_owner_orders():
+    query = request.args.get("query", "").strip().lower()
+
     rows = db.all()
     orders = []
+    custom_products = {}
 
-    for supplier, product, qty in rows:
+    for custom in db.get_custom_products():
+        supplier = custom["supplier"]
+        product = custom["product"]
+        image_filename = custom["image_filename"]
+        custom_products.setdefault(supplier, {})[product] = image_filename
+
+    for supplier, product, qty, unit in rows:
         if qty <= 0:
             continue
+
+        if query and query not in product.lower() and query not in supplier.lower():
+            continue
+
+        image_filename = custom_products.get(supplier, {}).get(product)
+        if image_filename:
+            image_url = url_for("serve_image", filename=image_filename)
+        else:
+            image_url = url_for(
+                "serve_image",
+                filename=normalize_name(product) + ".png",
+            )
 
         orders.append(
             {
                 "supplier": supplier,
                 "product": product,
                 "qty": qty,
-                "image": url_for(
-                    "serve_image",
-                    filename=normalize_name(product) + ".png",
-                ),
+                "unit": unit or "Pièce",
+                "image": image_url,
             }
         )
 
     return jsonify(orders)
+
+
+@app.route("/api/remove_order", methods=["DELETE"])
+def api_remove_order():
+    data = request.get_json(silent=True) or {}
+    supplier = data.get("supplier", "")
+    product = data.get("product", "")
+
+    if not supplier or not product:
+        return jsonify({"error": "Fournisseur et produit requis."}), 400
+
+    db.delete_order(supplier, product)
+    return jsonify({"success": True})
+
+
+@app.route("/api/add_product", methods=["POST"])
+def api_add_product():
+    supplier = request.form.get("supplier", "")
+    product = request.form.get("product", "").strip()
+    image_file = request.files.get("image")
+
+    if not supplier or not product:
+        return jsonify({"error": "Fournisseur et nom de produit requis."}), 400
+
+    filename = None
+    if image_file and image_file.filename:
+        ext = os.path.splitext(image_file.filename)[1].lower()
+        if ext not in ALLOWED_IMAGE_EXTENSIONS:
+            ext = ".png"
+
+        filename = normalize_name(product) + ext
+        image_folder = os.path.join(BASE_DIR, "images")
+        os.makedirs(image_folder, exist_ok=True)
+        save_path = os.path.join(image_folder, filename)
+        image_file.save(save_path)
+
+    db.add_custom_product(supplier, product, filename)
+    return jsonify({"success": True})
 
 
 @app.route("/api/clear_orders", methods=["POST"])
@@ -144,13 +231,13 @@ def download_pdf():
     rows = db.all()
     grouped = {}
 
-    for supplier, product, qty in rows:
+    for supplier, product, qty, unit in rows:
         if qty <= 0:
             continue
-        grouped.setdefault(supplier, []).append((product, qty))
+        grouped.setdefault(supplier, []).append((product, qty, unit or "Pièce"))
 
     if not grouped:
-        return jsonify({"error": "No active orders"}), 400
+        return jsonify({"error": "Aucune commande active"}), 400
 
     file_path = generate_pdf_report(grouped)
 
@@ -161,7 +248,7 @@ def download_pdf():
             download_name=os.path.basename(file_path),
         )
 
-    return jsonify({"error": "Unable to create PDF"}), 500
+    return jsonify({"error": "Impossible de créer le PDF"}), 500
 
 
 if __name__ == "__main__":

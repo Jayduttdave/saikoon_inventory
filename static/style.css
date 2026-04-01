@@ -15,8 +15,17 @@ body {
   background: linear-gradient(180deg, #eef2ff 0%, #f8fafc 100%);
 }
 
+body.loading::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.2);
+  z-index: 9999;
+  pointer-events: none;
+}
+
 .app-shell {
-  max-width: 1400px;
+  max-width: 1360px;
   margin: 0 auto;
   padding: 24px;
 }
@@ -77,7 +86,7 @@ body {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1.45fr 1fr;
+  grid-template-columns: 1.35fr 1fr;
   gap: 22px;
 }
 
@@ -109,6 +118,13 @@ body {
   font-size: 14px;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .panel-controls {
   display: grid;
   grid-template-columns: 1fr;
@@ -127,12 +143,15 @@ body {
   font-size: 15px;
 }
 
-.panel-controls select {
-  max-width: 100%;
+.product-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
 }
 
 .list-pane {
   display: grid;
+  grid-template-columns: 1fr;
   gap: 14px;
 }
 
@@ -149,7 +168,11 @@ body {
 }
 
 .item-card {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 10px;
 }
 
 .item-avatar,
@@ -177,7 +200,7 @@ body {
 .item-title {
   margin: 0;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .item-subtitle {
@@ -187,20 +210,72 @@ body {
 }
 
 .item-control {
-  min-width: 100px;
+  grid-column: 1 / -1;
+  width: 100%;
   display: flex;
-  justify-content: flex-end;
-  width: auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
+.qty-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.qty-button,
 .qty-input {
-  width: 100%;
-  padding: 12px 10px;
-  border-radius: 12px;
+  height: 44px;
+}
+
+.qty-button {
+  width: 44px;
+  border-radius: 14px;
   border: 1px solid #d1d5db;
   background: white;
   color: #111827;
-  font-size: 15px;
+  font-size: 24px;
+  font-weight: 700;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  touch-action: manipulation;
+}
+
+.qty-input {
+  width: 76px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #111827;
+  font-size: 18px;
+  text-align: center;
+}
+
+.unit-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.unit-button {
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background: white;
+  padding: 8px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  color: #111827;
+}
+
+.unit-button.active {
+  background: #2563eb;
+  color: white;
+  border-color: #2563eb;
 }
 
 .owner-card {
@@ -219,7 +294,10 @@ body {
   border-radius: 16px;
   background: white;
   border: 1px solid #e5e7eb;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
 }
 
 .owner-row img {
@@ -236,26 +314,28 @@ body {
 }
 
 .owner-qty {
-  min-width: 40px;
+  min-width: 70px;
   text-align: right;
   color: #2563eb;
   font-weight: 700;
 }
 
-.panel-actions {
-  margin-top: 18px;
+.owner-actions {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.delete-button {
   border: none;
   border-radius: 14px;
   cursor: pointer;
   font-size: 14px;
   font-weight: 700;
-  padding: 12px 18px;
+  padding: 11px 16px;
 }
 
 .primary-button {
@@ -269,6 +349,24 @@ body {
   border: 1px solid #d1d5db;
 }
 
+.compact-button {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.delete-button {
+  background: #ef4444;
+  color: white;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.panel-actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .empty-state,
 .loading-card {
   padding: 24px;
@@ -277,6 +375,101 @@ body {
   color: #6b7280;
   background: #f8fafc;
   border: 1px dashed #d1d5db;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 20;
+}
+
+.modal.hidden,
+.modal-backdrop.hidden {
+  display: none !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  z-index: -1 !important;
+}
+
+.modal-card {
+  width: min(520px, calc(100vw - 32px));
+  background: white;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
+  position: relative;
+  z-index: 21;
+}
+
+.modal-card h2 {
+  margin-top: 0;
+}
+
+.modal-card label {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  color: #111827;
+  font-weight: 600;
+}
+
+.modal-card input,
+.modal-card select {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid #d1d5db;
+  background: white;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  z-index: 10;
+}
+
+.scroll-btn {
+  position: fixed;
+  right: 18px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: white;
+  font-size: 24px;
+  border: none;
+  cursor: pointer;
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.28);
+  touch-action: manipulation;
+}
+
+.up {
+  bottom: 90px;
+}
+
+.down {
+  bottom: 20px;
+}
+
+@media (min-width: 768px) {
+  .product-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 980px) {
@@ -289,38 +482,31 @@ body {
   .app-shell {
     padding: 16px;
   }
+
   .app-bar {
     padding: 18px;
   }
+
   .panel {
     padding: 18px;
   }
 
-  .item-card {
-    align-items: flex-start;
-  }
-
-  .item-control {
-    width: 100%;
-    justify-content: flex-start;
-    margin-top: 12px;
-  }
-
-  .qty-input {
-    max-width: 100%;
-  }
-
   .owner-row {
-    flex-wrap: wrap;
+    grid-template-columns: 44px minmax(0, 1fr);
     gap: 10px;
   }
 
   .owner-text {
-    flex: 1 1 100%;
+    grid-column: 2;
   }
 
   .owner-qty {
-    min-width: 60px;
+    grid-column: 2;
     text-align: left;
+  }
+
+  .owner-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }

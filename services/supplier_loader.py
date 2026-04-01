@@ -2,9 +2,9 @@ import os
 import pandas as pd
 from openpyxl import load_workbook
 
-
-EXCEL_FILE = "Fournisseur Yoomi.xlsx"
-IMAGE_FOLDER = "images"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EXCEL_FILE = os.path.join(BASE_DIR, "Fournisseur Yoomi.xlsx")
+IMAGE_FOLDER = os.path.join(BASE_DIR, "images")
 
 
 def normalize_name(name):
@@ -83,7 +83,15 @@ def load_suppliers():
 
     print("Loading suppliers...")
 
-    xls = pd.ExcelFile(EXCEL_FILE)
+    if not os.path.exists(EXCEL_FILE):
+        print(f"Supplier file not found: {EXCEL_FILE}")
+        return suppliers
+
+    try:
+        xls = pd.ExcelFile(EXCEL_FILE)
+    except Exception as exc:
+        print(f"Failed to load supplier Excel file: {exc}")
+        return suppliers
 
     for sheet in xls.sheet_names:
 

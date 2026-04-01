@@ -3,34 +3,34 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Saikoon Kitchen System</title>
+  <title>Saikoon Kitchen Commandes</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
   <link rel="apple-touch-icon" href="{{ url_for('serve_image', filename='logo.png') }}">
   <meta name="theme-color" content="#2563eb">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Saikoon Kitchen">
+  <meta name="apple-mobile-web-app-title" content="Saikoon Commandes">
 </head>
 <body>
   <div class="app-shell">
     <header class="app-bar">
       <div class="app-brand">
-        <img class="app-logo" src="{{ url_for('serve_image', filename='logo.png') }}" alt="Saikoon logo">
+        <img class="app-logo" src="{{ url_for('serve_image', filename='logo.png') }}" alt="Logo Saikoon">
         <div>
-          <p class="brand">Saikoon Kitchen System</p>
-          <p class="subtitle">Order management for kitchen and owner dashboard</p>
+          <p class="brand">Saikoon Kitchen</p>
+          <p class="subtitle">Système de commandes</p>
         </div>
       </div>
-      <div class="status-chip">Web mode</div>
+      <div class="status-chip">Mode web</div>
     </header>
 
     <main class="dashboard-grid">
       <section class="panel">
         <div class="panel-header">
           <div>
-            <h1>Kitchen Orders</h1>
-            <p class="hint">Choose supplier, search products, then enter quantities.</p>
+            <h1>Commande cuisine</h1>
+            <p class="hint">Sélectionnez un fournisseur, recherchez un produit, puis entrez la quantité.</p>
           </div>
         </div>
 
@@ -39,40 +39,80 @@
           <input id="productSearch" type="search" placeholder="Rechercher un produit..." autocomplete="off">
         </div>
 
-        <div id="productList" class="list-pane"></div>
+        <div id="productList" class="product-grid"></div>
       </section>
 
       <section class="panel">
         <div class="panel-header">
           <div>
-            <h1>Owner Dashboard</h1>
-            <p class="hint">Live order summary, search and PDF export.</p>
+            <h1>Commandes</h1>
+            <p class="hint">Éditez, supprimez ou exportez vos commandes.</p>
           </div>
-          <button id="downloadPdf" class="primary-button">Télécharger PDF</button>
+          <div class="panel-header-actions">
+            <button id="addProduct" class="secondary-button" type="button">Ajouter un produit</button>
+            <button id="downloadPdf" class="primary-button" type="button">Télécharger PDF</button>
+          </div>
         </div>
 
         <div class="panel-controls">
-          <input id="ownerSearch" type="search" placeholder="Rechercher commande..." autocomplete="off">
+          <input id="ownerSearch" type="search" placeholder="Rechercher produit ou fournisseur..." autocomplete="off">
         </div>
 
         <div id="orderList" class="list-pane"></div>
 
         <div class="panel-actions">
-          <button id="clearOrders" class="secondary-button">Effacer les commandes</button>
+          <button id="clearOrders" class="secondary-button" type="button">Effacer les commandes</button>
         </div>
       </section>
     </main>
   </div>
 
+  <div id="productModal" class="modal hidden" style="display:none; opacity:0; visibility:hidden; pointer-events:none;">
+    <div class="modal-card">
+      <h2>Ajouter un nouveau produit</h2>
+      <label>
+        Fournisseur
+        <select id="newProductSupplier"></select>
+      </label>
+      <label>
+        Nom du produit
+        <input id="newProductName" type="text" placeholder="Nom du produit" required>
+      </label>
+      <label>
+        Image du produit
+        <input id="newProductImage" type="file" accept="image/*">
+      </label>
+      <div class="modal-actions">
+        <button id="cancelAddProduct" class="secondary-button" type="button">Annuler</button>
+        <button id="saveAddProduct" class="primary-button" type="button">Enregistrer</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop hidden" style="display:none; opacity:0; visibility:hidden; pointer-events:none;"></div>
+
+  <button id="scrollUp" class="scroll-btn up" type="button" aria-label="Monter">↑</button>
+  <button id="scrollDown" class="scroll-btn down" type="button" aria-label="Descendre">↓</button>
+
   <script>
     const suppliers = {{ suppliers|tojson|safe }};
     const supplierSelect = document.getElementById('supplierSelect');
+    const newProductSupplier = document.getElementById('newProductSupplier');
     const productSearch = document.getElementById('productSearch');
     const ownerSearch = document.getElementById('ownerSearch');
     const productList = document.getElementById('productList');
     const orderList = document.getElementById('orderList');
     const downloadPdf = document.getElementById('downloadPdf');
     const clearOrders = document.getElementById('clearOrders');
+    const addProductButton = document.getElementById('addProduct');
+    const productModal = document.getElementById('productModal');
+    const modalBackdrop = document.getElementById('modalBackdrop');
+    const newProductName = document.getElementById('newProductName');
+    const newProductImage = document.getElementById('newProductImage');
+    const saveAddProduct = document.getElementById('saveAddProduct');
+    const cancelAddProduct = document.getElementById('cancelAddProduct');
+    const scrollUp = document.getElementById('scrollUp');
+    const scrollDown = document.getElementById('scrollDown');
 
     let activeSupplier = suppliers[0] || '';
     let ordersCache = [];
@@ -90,72 +130,219 @@
 
     function renderSuppliers() {
       supplierSelect.innerHTML = '';
+      newProductSupplier.innerHTML = '';
       suppliers.forEach((name) => {
         const option = createElement('option', { text: name, attrs: { value: name } });
         supplierSelect.appendChild(option);
+
+        const newOption = createElement('option', { text: name, attrs: { value: name } });
+        newProductSupplier.appendChild(newOption);
       });
+    }
+
+    function showLoading() {
+      document.body.classList.add('loading');
+    }
+
+    function hideLoading() {
+      document.body.classList.remove('loading');
+    }
+
+    function showError(message) {
+      productList.innerHTML = `<div class="empty-state">${message}</div>`;
+    }
+
+    function qtyInputValue(value) {
+      const number = parseInt(value, 10);
+      return Number.isNaN(number) || number < 0 ? 0 : number;
     }
 
     async function fetchProducts() {
       const query = productSearch.value.trim();
       const url = `/api/products?supplier=${encodeURIComponent(activeSupplier)}&query=${encodeURIComponent(query)}`;
       const response = await fetch(url);
-      return response.ok ? response.json() : [];
+      if (!response.ok) {
+        throw new Error('Erreur de chargement produits');
+      }
+      return response.json();
     }
 
     async function fetchOrders() {
-      const response = await fetch('/api/owner_orders');
-      return response.ok ? response.json() : [];
+      const query = ownerSearch.value.trim();
+      const url = `/api/owner_orders?query=${encodeURIComponent(query)}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Erreur de chargement commandes');
+      }
+      return response.json();
     }
 
-    async function refreshProducts() {
-      productList.innerHTML = '<div class="loading-card">Chargement des produits...</div>';
-      const products = await fetchProducts();
-      productList.innerHTML = ''; 
-      if (!products.length) {
-        productList.innerHTML = '<div class="empty-state">Aucun produit trouvé.</div>';
-        return;
-      }
-
-      for (const product of products) {
-        const card = createElement('div', { className: 'item-card' });
-
-        const imageWrapper = createElement('div', { className: 'item-avatar' });
-        const image = createElement('img', { attrs: { src: product.image, alt: product.name } });
-        imageWrapper.appendChild(image);
-
-        const content = createElement('div', { className: 'item-content' });
-        content.appendChild(createElement('div', { className: 'item-title', text: product.name }));
-        content.appendChild(createElement('div', { className: 'item-subtitle', text: `Commande actuelle : ${product.qty}` }));
-
-        const control = createElement('div', { className: 'item-control' });
-        const qtyInput = createElement('input', { attrs: { type: 'number', min: '0', value: product.qty, 'data-product': product.name } });
-        qtyInput.className = 'qty-input';
-        qtyInput.addEventListener('change', () => updateOrder(product.name, qtyInput.value));
-
-        control.appendChild(qtyInput);
-        card.append(imageWrapper, content, control);
-        productList.appendChild(card);
-      }
+    async function updateOrder(product, qtyValue, unit) {
+      const quantity = Number(qtyInputValue(qtyValue));
+      await fetch('/api/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier: activeSupplier, product, qty: quantity, unit }),
+      });
+      await refreshOrders();
     }
 
-    async function refreshOrders() {
-      orderList.innerHTML = '<div class="loading-card">Chargement des commandes...</div>';
-      ordersCache = await fetchOrders();
-      renderOrderCards();
+    function createQtyControl(product) {
+      const control = createElement('div', { className: 'item-control' });
+      const qtyControl = createElement('div', { className: 'qty-control' });
+      const minusButton = createElement('button', {
+        className: 'qty-button',
+        text: '−',
+        attrs: { type: 'button', 'aria-label': 'Diminuer la quantité' },
+      });
+      const plusButton = createElement('button', {
+        className: 'qty-button',
+        text: '+',
+        attrs: { type: 'button', 'aria-label': 'Augmenter la quantité' },
+      });
+
+      const qtyInput = createElement('input', {
+        attrs: {
+          type: 'number',
+          min: '0',
+          value: product.qty,
+          inputmode: 'numeric',
+          pattern: '[0-9]*',
+        },
+      });
+      qtyInput.className = 'qty-input';
+
+      const unitToggle = createElement('div', { className: 'unit-toggle' });
+      const cartonButton = createElement('button', {
+        className: `unit-button${product.unit === 'Carton' ? ' active' : ''}`,
+        text: 'Carton',
+        attrs: { type: 'button' },
+      });
+      const pieceButton = createElement('button', {
+        className: `unit-button${product.unit !== 'Carton' ? ' active' : ''}`,
+        text: 'Pièce',
+        attrs: { type: 'button' },
+      });
+
+      function getActiveUnit() {
+        return unitToggle.querySelector('.unit-button.active')?.textContent || 'Pièce';
+      }
+
+      function syncQuantity(value) {
+        const quantity = Math.max(0, Number(qtyInputValue(value)));
+        qtyInput.value = quantity;
+        return quantity;
+      }
+
+      async function changeQuantity(delta) {
+        const next = syncQuantity(Number(qtyInput.value) + delta);
+        await updateOrder(product.name, next, getActiveUnit());
+      }
+
+      let repeatTimeout;
+      let repeatInterval;
+
+      function stopRepeat() {
+        if (repeatTimeout) {
+          clearTimeout(repeatTimeout);
+          repeatTimeout = null;
+        }
+        if (repeatInterval) {
+          clearInterval(repeatInterval);
+          repeatInterval = null;
+        }
+      }
+
+      function startRepeat(delta) {
+        changeQuantity(delta);
+        repeatTimeout = window.setTimeout(() => {
+          repeatInterval = window.setInterval(() => changeQuantity(delta), 120);
+        }, 350);
+      }
+
+      minusButton.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        startRepeat(-1);
+      });
+      minusButton.addEventListener('pointerup', stopRepeat);
+      minusButton.addEventListener('pointerleave', stopRepeat);
+      minusButton.addEventListener('pointercancel', stopRepeat);
+
+      plusButton.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        startRepeat(1);
+      });
+      plusButton.addEventListener('pointerup', stopRepeat);
+      plusButton.addEventListener('pointerleave', stopRepeat);
+      plusButton.addEventListener('pointercancel', stopRepeat);
+
+      qtyInput.addEventListener('change', async () => {
+        const value = syncQuantity(qtyInput.value);
+        await updateOrder(product.name, value, getActiveUnit());
+      });
+
+      cartonButton.addEventListener('click', async () => {
+        cartonButton.classList.add('active');
+        pieceButton.classList.remove('active');
+        await updateOrder(product.name, qtyInput.value, 'Carton');
+      });
+
+      pieceButton.addEventListener('click', async () => {
+        pieceButton.classList.add('active');
+        cartonButton.classList.remove('active');
+        await updateOrder(product.name, qtyInput.value, 'Pièce');
+      });
+
+      qtyControl.append(minusButton, qtyInput, plusButton);
+      unitToggle.append(cartonButton, pieceButton);
+      control.append(qtyControl, unitToggle);
+      return control;
+    }
+
+    async function loadProducts() {
+      showLoading();
+
+      try {
+        productList.innerHTML = '<div class="loading-card">Chargement des produits...</div>';
+        const products = await fetchProducts();
+        productList.innerHTML = '';
+
+        if (!products.length) {
+          productList.innerHTML = '<div class="empty-state">Aucun produit trouvé.</div>';
+          return;
+        }
+
+        for (const product of products) {
+          const card = createElement('div', { className: 'item-card' });
+          const imageWrapper = createElement('div', { className: 'item-avatar' });
+          const image = createElement('img', { attrs: { src: product.image, alt: product.name } });
+          imageWrapper.appendChild(image);
+
+          const content = createElement('div', { className: 'item-content' });
+          content.appendChild(createElement('div', { className: 'item-title', text: product.name }));
+          content.appendChild(createElement('div', { className: 'item-subtitle', text: `Quantité commandée : ${product.qty} ${product.unit}` }));
+
+          card.append(imageWrapper, content, createQtyControl(product));
+          productList.appendChild(card);
+        }
+
+      } catch (error) {
+        console.error('Erreur chargement produits:', error);
+        showError('Impossible de charger les produits');
+      } finally {
+        hideLoading();
+      }
     }
 
     function renderOrderCards() {
-      const query = ownerSearch.value.trim().toLowerCase();
-      const filtered = ordersCache.filter((order) => !query || order.product.toLowerCase().includes(query) || order.supplier.toLowerCase().includes(query));
       orderList.innerHTML = '';
-      if (!filtered.length) {
-        orderList.innerHTML = '<div class="empty-state">Aucune commande correspondante.</div>';
+      if (!ordersCache.length) {
+        orderList.innerHTML = '<div class="empty-state">Aucune commande active.</div>';
         return;
       }
 
       const grouped = {};
-      for (const order of filtered) {
+      for (const order of ordersCache) {
         grouped[order.supplier] = grouped[order.supplier] || [];
         grouped[order.supplier].push(order);
       }
@@ -168,8 +355,41 @@
           const row = createElement('div', { className: 'owner-row' });
           const image = createElement('img', { attrs: { src: item.image, alt: item.product } });
           const label = createElement('div', { className: 'owner-text', text: item.product });
-          const qty = createElement('div', { className: 'owner-qty', text: item.qty });
-          row.append(image, label, qty);
+          const qty = createElement('div', { className: 'owner-qty', text: `${item.qty} ${item.unit}` });
+          const actions = createElement('div', { className: 'owner-actions' });
+
+          const editButton = createElement('button', {
+            className: 'secondary-button compact-button',
+            text: 'Modifier',
+            attrs: { type: 'button' },
+          });
+
+          const deleteButton = createElement('button', {
+            className: 'delete-button',
+            text: 'Supprimer',
+            attrs: { type: 'button' },
+          });
+
+          editButton.addEventListener('click', async () => {
+            activeSupplier = supplier;
+            supplierSelect.value = supplier;
+            productSearch.value = item.product;
+            await loadProducts();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          });
+
+          deleteButton.addEventListener('click', async () => {
+            await fetch('/api/remove_order', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ supplier, product: item.product }),
+            });
+            await refreshOrders();
+            await loadProducts();
+          });
+
+          actions.append(editButton, deleteButton);
+          row.append(image, label, qty, actions);
           card.appendChild(row);
         }
 
@@ -177,28 +397,142 @@
       }
     }
 
-    async function updateOrder(product, qtyValue) {
-      const quantity = Number(qtyInputValue(qtyValue));
-      await fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supplier: activeSupplier, product, qty: quantity }),
-      });
-      refreshOrders();
+    async function refreshOrders() {
+      try {
+        orderList.innerHTML = '<div class="loading-card">Chargement des commandes...</div>';
+        ordersCache = await fetchOrders();
+        renderOrderCards();
+      } catch (error) {
+        console.error('Erreur chargement commandes:', error);
+        orderList.innerHTML = '<div class="empty-state">Impossible de charger les commandes.</div>';
+      }
     }
 
-    function qtyInputValue(value) {
-      const number = parseInt(value, 10);
-      return Number.isNaN(number) || number < 0 ? 0 : number;
+    function openAddProductModal() {
+      productModal.classList.remove('hidden');
+      modalBackdrop.classList.remove('hidden');
+      productModal.style.display = 'grid';
+      productModal.style.opacity = '1';
+      productModal.style.visibility = 'visible';
+      productModal.style.pointerEvents = 'auto';
+      modalBackdrop.style.display = 'block';
+      modalBackdrop.style.opacity = '1';
+      modalBackdrop.style.visibility = 'visible';
+      modalBackdrop.style.pointerEvents = 'auto';
+      newProductName.value = '';
+      newProductImage.value = '';
+      newProductSupplier.value = activeSupplier;
+    }
+
+    function closeAddProductModal() {
+      productModal.classList.add('hidden');
+      modalBackdrop.classList.add('hidden');
+      productModal.style.display = 'none';
+      productModal.style.opacity = '0';
+      productModal.style.visibility = 'hidden';
+      productModal.style.pointerEvents = 'none';
+      modalBackdrop.style.display = 'none';
+      modalBackdrop.style.opacity = '0';
+      modalBackdrop.style.visibility = 'hidden';
+      modalBackdrop.style.pointerEvents = 'none';
+    }
+
+    async function saveNewProduct() {
+      const supplier = newProductSupplier.value;
+      const name = newProductName.value.trim();
+      const file = newProductImage.files[0];
+
+      if (!supplier || !name) {
+        alert('Veuillez renseigner le fournisseur et le nom du produit.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('supplier', supplier);
+      formData.append('product', name);
+      if (file) {
+        formData.append('image', file);
+      }
+
+      const response = await fetch('/api/add_product', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        alert(payload?.error || 'Impossible d’ajouter le produit.');
+        return;
+      }
+
+      closeAddProductModal();
+      if (supplier === activeSupplier) {
+        await loadProducts();
+      }
+    }
+
+    function getScrollTop() {
+      return window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+    }
+
+    function getScrollHeight() {
+      return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    }
+
+    function updateArrows() {
+      const scrollTop = getScrollTop();
+      const scrollHeight = getScrollHeight();
+      const windowHeight = window.innerHeight;
+
+      if (scrollHeight <= windowHeight + 10) {
+        scrollUp.style.display = 'none';
+        scrollDown.style.display = 'none';
+        return;
+      }
+
+      if (scrollTop <= 10) {
+        scrollUp.style.display = 'none';
+        scrollDown.style.display = 'flex';
+      } else if (scrollTop + windowHeight >= scrollHeight - 10) {
+        scrollUp.style.display = 'flex';
+        scrollDown.style.display = 'none';
+      } else {
+        scrollUp.style.display = 'flex';
+        scrollDown.style.display = 'flex';
+      }
+    }
+
+    function debounce(fn, delay) {
+      let timeout;
+      return (...args) => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => fn.apply(this, args), delay);
+      };
     }
 
     supplierSelect.addEventListener('change', async (event) => {
       activeSupplier = event.target.value;
-      await refreshProducts();
+      await loadProducts();
     });
 
-    productSearch.addEventListener('input', debounce(refreshProducts, 250));
-    ownerSearch.addEventListener('input', renderOrderCards);
+    productSearch.addEventListener('input', debounce(loadProducts, 250));
+    ownerSearch.addEventListener('input', debounce(refreshOrders, 250));
+
+    addProductButton.addEventListener('click', openAddProductModal);
+    cancelAddProduct.addEventListener('click', closeAddProductModal);
+    saveAddProduct.addEventListener('click', saveNewProduct);
+    modalBackdrop.addEventListener('click', closeAddProductModal);
+
+    scrollDown.addEventListener('click', () => {
+      window.scrollTo({ top: getScrollHeight(), behavior: 'smooth' });
+    });
+
+    scrollUp.addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    window.addEventListener('scroll', updateArrows);
+    window.addEventListener('resize', updateArrows);
 
     downloadPdf.addEventListener('click', async () => {
       try {
@@ -210,7 +544,7 @@
 
         const blob = await response.blob();
         const disposition = response.headers.get('Content-Disposition') || '';
-        let filename = 'orders.pdf';
+        let filename = 'commandes.pdf';
         const match = disposition.match(/filename=(?:"?)([^";]+)/);
         if (match) {
           filename = match[1].replace(/['"]/g, '');
@@ -223,36 +557,43 @@
         a.remove();
         URL.revokeObjectURL(url);
       } catch (error) {
-        alert('Impossible de télécharger le PDF. Essayez depuis Safari si vous êtes en mode application.');
+        alert('Impossible de télécharger le PDF.');
       }
     });
 
     clearOrders.addEventListener('click', async () => {
       await fetch('/api/clear_orders', { method: 'POST' });
       await refreshOrders();
-      await refreshProducts();
+      await loadProducts();
     });
-
-    function debounce(fn, delay) {
-      let timeout;
-      return (...args) => {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => fn.apply(this, args), delay);
-      };
-    }
 
     async function init() {
       renderSuppliers();
       supplierSelect.value = activeSupplier;
-      await refreshProducts();
+      await loadProducts();
       await refreshOrders();
+      updateArrows();
       setInterval(refreshOrders, 3000);
     }
 
     init();
 
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
+      window.addEventListener('load', async () => {
+        const isLocalHost = window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost';
+
+        if (isLocalHost) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations.map((registration) => registration.unregister()));
+
+          if (window.caches) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((key) => caches.delete(key)));
+          }
+
+          return;
+        }
+
         navigator.serviceWorker.register('/sw.js');
       });
     }

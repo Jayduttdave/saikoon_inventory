@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from reportlab.platypus import (
     SimpleDocTemplate,
@@ -51,14 +52,47 @@ def find_image_path(filename):
 # PDF generator
 # --------------------------
 
+def format_french_datetime(dt):
+    weekdays = [
+        "lundi",
+        "mardi",
+        "mercredi",
+        "jeudi",
+        "vendredi",
+        "samedi",
+        "dimanche",
+    ]
+    months = [
+        "janvier",
+        "février",
+        "mars",
+        "avril",
+        "mai",
+        "juin",
+        "juillet",
+        "août",
+        "septembre",
+        "octobre",
+        "novembre",
+        "décembre",
+    ]
+    return (
+        f"{weekdays[dt.weekday()]} {dt.day} {months[dt.month - 1]} "
+        f"{dt.year} {dt:%H:%M:%S}"
+    )
+
+
 def generate_pdf_report(orders):
 
     try:
 
-        now = datetime.now()
+        try:
+            now = datetime.now(ZoneInfo("Europe/Paris"))
+        except Exception:
+            now = datetime.now()
 
         filename = (
-            "orders_"
+            "commandes_"
             + now.strftime("%Y%m%d_%H%M%S")
             + ".pdf"
         )
@@ -87,7 +121,7 @@ def generate_pdf_report(orders):
 
         elements.append(
             Paragraph(
-                "Saikoon Kitchen Orders",
+                "Commandes Saikoon Kitchen",
                 styles["Title"]
             )
         )
@@ -98,7 +132,7 @@ def generate_pdf_report(orders):
 
         elements.append(
             Paragraph(
-                now.strftime("%A %d %B %Y %H:%M:%S"),
+                format_french_datetime(now),
                 styles["Normal"]
             )
         )
@@ -126,7 +160,12 @@ def generate_pdf_report(orders):
 
             # Loop products
 
-            for product, qty in items:
+            for item in items:
+                if len(item) == 3:
+                    product, qty, unit = item
+                else:
+                    product, qty = item
+                    unit = "Pièce"
 
                 image_name = normalize_name(product)
 
@@ -154,7 +193,7 @@ def generate_pdf_report(orders):
                 elements.append(
 
                     Paragraph(
-                        f"{product} : {qty}",
+                        f"{product} : {qty} {unit}",
                         styles["BodyText"]
                     )
 
