@@ -1,4 +1,6 @@
 import os
+import unicodedata
+
 import pandas as pd
 from openpyxl import load_workbook
 
@@ -22,7 +24,42 @@ def normalize_name(name):
     )
 
 
-def extract_images_once():
+def normalize_header(value):
+
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return " ".join(text.lower().split())
+
+
+def find_column(columns, *keywords):
+
+    for col in columns:
+
+        header = normalize_header(col)
+
+        if all(keyword in header for keyword in keywords):
+            return col
+
+    return None
+
+
+def find_product_column_index(ws):
+
+    for cell in ws[1]:
+
+        header = normalize_header(cell.value)
+
+        if "nom" in header and "produit" in header:
+            return cell.col_idx
+
+    return 2
+
+
+def extract_images_once(force=False):
+
+    if not os.path.exists(EXCEL_FILE):
+        print(f"Supplier file not found: {EXCEL_FILE}")
+        return
 
     if not os.path.exists(IMAGE_FOLDER):
         os.makedirs(IMAGE_FOLDER)
@@ -34,23 +71,26 @@ def extract_images_once():
         data_only=True
     )
 
-    for sheet_name in wb.sheetnames:
+    for ws in wb.worksheets:
 
-        ws = wb[sheet_name]
-
-        if not hasattr(ws, "_images"):
+        if not hasattr(ws, "_images") or not ws._images:
             continue
+
+        product_column = find_product_column_index(ws)
 
         for image in ws._images:
 
-            row = image.anchor._from.row + 1
+            try:
+                row = image.anchor._from.row + 1
+                product_name = ws.cell(
+                    row=row,
+                    column=product_column
+                ).value
+            except Exception as exc:
+                print("Image skip:", exc)
+                continue
 
-            product_name = ws.cell(
-                row=row,
-                column=2
-            ).value
-
-            if not product_name:
+            if not product_name or not str(product_name).strip():
                 continue
 
             filename = normalize_name(product_name)
@@ -60,7 +100,7 @@ def extract_images_once():
                 f"{filename}.png"
             )
 
-            if os.path.exists(path):
+            if os.path.exists(path) and not force:
                 continue
 
             try:
@@ -70,14 +110,14 @@ def extract_images_once():
                 with open(path, "wb") as f:
                     f.write(data)
 
-                print("Saved:", filename)
+                print("Saved:", ascii(filename))
 
-            except Exception as e:
+            except Exception as exc:
 
-                print("Image skip:", e)
+                print("Image skip:", exc)
 
 
-def load_suppliers():
+def load_supplier_catalog():
 
     suppliers = {}
 
@@ -95,25 +135,60 @@ def load_suppliers():
 
     for sheet in xls.sheet_names:
 
-        df = pd.read_excel(
-            xls,
-            sheet
-        )
+        try:
+            df = pd.read_excel(
+                xls,
+                sheet
+            )
+        except Exception as exc:
+            print(f"Skipping sheet '{sheet}': {exc}")
+            continue
 
-        products = []
+        product_col = find_column(df.columns, "nom")
 
-        for col in df.columns:
+        if not product_col:
+            continue
 
-            if "NOM" in col.upper():
+        unit_col = find_column(df.columns, "unite")
+        items = []
+        seen = set()
 
-                for value in df[col]:
+        for _, row in df.iterrows():
 
-                    if pd.notna(value):
+            raw_product = row.get(product_col)
 
-                        products.append(
-                            str(value)
-                        )
+            if pd.isna(raw_product) or not str(raw_product).strip():
+                continue
 
-        suppliers[sheet] = products
+            product = str(raw_product)
+
+            if product in seen:
+                continue
+
+            seen.add(product)
+
+            unit = ""
+            if unit_col:
+                raw_unit = row.get(unit_col)
+                if pd.notna(raw_unit):
+                    unit = str(raw_unit).strip()
+
+            items.append(
+                {
+                    "name": product,
+                    "unit": unit or "Pièce"
+                }
+            )
+
+        if items:
+            suppliers[sheet] = items
 
     return suppliers
+
+
+def load_suppliers():
+
+    return {
+        supplier: [item["name"] for item in items]
+        for supplier, items in load_supplier_catalog().items()
+    }

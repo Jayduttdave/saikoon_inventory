@@ -10,7 +10,12 @@ from flask import (
     url_for,
 )
 
-from services.supplier_loader import load_suppliers, normalize_name
+from services.supplier_loader import (
+    EXCEL_FILE,
+    extract_images_once,
+    load_supplier_catalog,
+    normalize_name,
+)
 from services.database import Database
 from services.pdf_report import generate_pdf_report
 
@@ -28,7 +33,25 @@ app = Flask(
 )
 
 db = Database()
-suppliers = load_suppliers()
+supplier_catalog = {}
+supplier_catalog_mtime = None
+
+
+def get_supplier_catalog():
+    global supplier_catalog, supplier_catalog_mtime
+
+    try:
+        current_mtime = os.path.getmtime(EXCEL_FILE)
+    except OSError:
+        current_mtime = None
+
+    if current_mtime != supplier_catalog_mtime:
+        supplier_catalog = load_supplier_catalog()
+        if current_mtime is not None:
+            extract_images_once(force=True)
+        supplier_catalog_mtime = current_mtime
+
+    return supplier_catalog
 
 
 def find_image_path(filename):
@@ -43,7 +66,7 @@ def find_image_path(filename):
 def index():
     return render_template(
         "index.html",
-        suppliers=list(suppliers.keys()),
+        suppliers=list(get_supplier_catalog().keys()),
     )
 
 
@@ -71,7 +94,13 @@ def api_products():
     supplier = request.args.get("supplier", "")
     query = request.args.get("query", "").strip().lower()
 
-    items = suppliers.get(supplier, [])
+    catalog = get_supplier_catalog()
+    items = catalog.get(supplier, [])
+    default_units = {
+        item["name"]: item.get("unit") or "Pièce"
+        for item in items
+    }
+
     custom_products = {
         cp["product"]: cp["image_filename"]
         for cp in db.get_custom_products(supplier)
@@ -84,7 +113,9 @@ def api_products():
 
     products = []
     seen = set()
-    for product in items + list(custom_products.keys()):
+    product_names = [item["name"] for item in items] + list(custom_products.keys())
+
+    for product in product_names:
         if product in seen:
             continue
         seen.add(product)
@@ -92,7 +123,10 @@ def api_products():
         if query and query not in product.lower():
             continue
 
-        qty, unit = all_orders.get((supplier, product), (0, "Pièce"))
+        qty, unit = all_orders.get(
+            (supplier, product),
+            (0, default_units.get(product, "Pièce")),
+        )
         image_filename = custom_products.get(product)
 
         if image_filename:

@@ -311,13 +311,17 @@ body.loading::before {
   color: #111827;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .owner-qty {
-  min-width: 70px;
+  min-width: 82px;
   text-align: right;
   color: #2563eb;
   font-weight: 700;
+  white-space: nowrap;
+  justify-self: end;
 }
 
 .owner-actions {
@@ -472,9 +476,73 @@ body.loading::before {
   }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1180px) {
   .dashboard-grid {
     grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .panel {
+    padding: 20px;
+  }
+
+  .panel-header {
+    margin-bottom: 16px;
+  }
+
+  .list-pane {
+    gap: 10px;
+  }
+
+  .owner-card {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .owner-card-title {
+    margin-bottom: 6px;
+    font-size: 15px;
+  }
+
+  .owner-row {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .owner-row img {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .owner-text {
+    padding-top: 1px;
+    font-size: 13px;
+  }
+
+  .owner-qty {
+    grid-column: 2;
+    margin-top: 2px;
+    text-align: left;
+    justify-self: start;
+    white-space: normal;
+    font-size: 13px;
+  }
+
+  .owner-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding-top: 2px;
+    gap: 6px;
+  }
+
+  .compact-button,
+  .delete-button {
+    padding: 7px 10px;
+    font-size: 12px;
+    border-radius: 10px;
   }
 }
 
@@ -491,9 +559,14 @@ body.loading::before {
     padding: 18px;
   }
 
+  .owner-card {
+    padding: 12px;
+  }
+
   .owner-row {
-    grid-template-columns: 44px minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px;
   }
 
   .owner-text {

@@ -6,3 +6,4 @@ python-dateutil
 six
 reportlab
 pillow
+psycopg2-binary

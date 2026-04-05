@@ -1,5 +1,10 @@
-import sqlite3
 import os
+import sqlite3
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 
 
 BASE_DIR = os.path.dirname(
@@ -11,17 +16,60 @@ DB_PATH = os.path.join(
     "orders.db"
 )
 
+POSTGRES_URL = (
+    os.environ.get("SUPABASE_DB_URL")
+    or os.environ.get("DATABASE_URL")
+    or ""
+).strip()
+
 
 class Database:
 
     def __init__(self):
 
+        self.backend = "sqlite"
+        self.conn = None
+        self.param = "?"
+
+        self.connect()
+        self.create_table()
+
+    def connect(self):
+
+        if POSTGRES_URL and psycopg2 is not None:
+            try:
+                connect_kwargs = {}
+                if "sslmode=" not in POSTGRES_URL:
+                    connect_kwargs["sslmode"] = os.environ.get(
+                        "PGSSLMODE",
+                        "require"
+                    )
+
+                self.conn = psycopg2.connect(
+                    POSTGRES_URL,
+                    **connect_kwargs
+                )
+                self.backend = "postgres"
+                self.param = "%s"
+                print("Database backend: Supabase/Postgres")
+                return
+            except Exception as exc:
+                print(
+                    "Supabase/Postgres unavailable, "
+                    f"falling back to SQLite: {exc}"
+                )
+
+        elif POSTGRES_URL and psycopg2 is None:
+            print(
+                "psycopg2-binary not installed; "
+                "falling back to SQLite."
+            )
+
         self.conn = sqlite3.connect(
             DB_PATH,
             check_same_thread=False
         )
-
-        self.create_table()
+        print(f"Database backend: SQLite ({DB_PATH})")
 
     def create_table(self):
 
@@ -56,15 +104,26 @@ class Database:
     def ensure_schema(self):
 
         cursor = self.conn.cursor()
-        cursor.execute("PRAGMA table_info(orders)")
-        columns = [row[1] for row in cursor.fetchall()]
+
+        if self.backend == "postgres":
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'orders'
+                """
+            )
+            columns = [row[0] for row in cursor.fetchall()]
+        else:
+            cursor.execute("PRAGMA table_info(orders)")
+            columns = [row[1] for row in cursor.fetchall()]
 
         if 'unit' not in columns:
             cursor.execute(
                 "ALTER TABLE orders ADD COLUMN unit TEXT DEFAULT 'Pièce'"
             )
 
-        # Legacy cleanup: this app is commandes-only now.
         cursor.execute("DROP TABLE IF EXISTS stock")
 
         self.conn.commit()
@@ -80,11 +139,11 @@ class Database:
         cursor = self.conn.cursor()
 
         cursor.execute(
-            """
+            f"""
             INSERT INTO orders
             (supplier, product, qty, unit)
 
-            VALUES (?, ?, ?, ?)
+            VALUES ({self.param}, {self.param}, {self.param}, {self.param})
 
             ON CONFLICT(supplier, product)
             DO UPDATE SET qty=excluded.qty, unit=excluded.unit
@@ -107,7 +166,7 @@ class Database:
             """
             SELECT supplier, product, qty, unit
             FROM orders
-            ORDER BY supplier
+            ORDER BY supplier, product
             """
         )
 
@@ -118,9 +177,9 @@ class Database:
         cursor = self.conn.cursor()
 
         cursor.execute(
-            """
+            f"""
             DELETE FROM orders
-            WHERE supplier = ? AND product = ?
+            WHERE supplier = {self.param} AND product = {self.param}
             """,
             (supplier, product)
         )
@@ -133,10 +192,10 @@ class Database:
 
         if supplier:
             cursor.execute(
-                """
+                f"""
                 SELECT product, image_filename
                 FROM custom_products
-                WHERE supplier = ?
+                WHERE supplier = {self.param}
                 ORDER BY product
                 """,
                 (supplier,)
@@ -175,10 +234,10 @@ class Database:
         cursor = self.conn.cursor()
 
         cursor.execute(
-            """
+            f"""
             INSERT INTO custom_products
             (supplier, product, image_filename)
-            VALUES (?, ?, ?)
+            VALUES ({self.param}, {self.param}, {self.param})
             ON CONFLICT(supplier, product)
             DO UPDATE SET image_filename=excluded.image_filename
             """,
