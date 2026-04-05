@@ -1,10 +1,18 @@
 import os
 import sqlite3
+from threading import RLock
 
 try:
     import psycopg2
 except ImportError:
     psycopg2 = None
+
+
+PSYCOPG_CONNECTION_ERRORS = (
+    (psycopg2.InterfaceError, psycopg2.OperationalError)
+    if psycopg2 is not None
+    else tuple()
+)
 
 
 BASE_DIR = os.path.dirname(
@@ -30,52 +38,150 @@ class Database:
         self.backend = "sqlite"
         self.conn = None
         self.param = "?"
+        self.lock = RLock()
 
-        self.connect()
+        self.connect(force=True)
         self.create_table()
 
-    def connect(self):
+    def close(self):
 
-        if POSTGRES_URL and psycopg2 is not None:
+        if self.conn is not None:
             try:
-                connect_kwargs = {}
-                if "sslmode=" not in POSTGRES_URL:
-                    connect_kwargs["sslmode"] = os.environ.get(
-                        "PGSSLMODE",
-                        "require"
+                self.conn.close()
+            except Exception:
+                pass
+
+        self.conn = None
+
+    def connect(self, force=False):
+
+        with self.lock:
+
+            if not force and self.conn is not None:
+                if self.backend == "postgres":
+                    try:
+                        if self.conn.closed == 0:
+                            return
+                    except Exception:
+                        pass
+                else:
+                    return
+
+            self.close()
+
+            if POSTGRES_URL and psycopg2 is not None:
+                try:
+                    if "sslmode=" not in POSTGRES_URL:
+                        self.conn = psycopg2.connect(
+                            POSTGRES_URL,
+                            connect_timeout=10,
+                            sslmode=os.environ.get(
+                                "PGSSLMODE",
+                                "require"
+                            )
+                        )
+                    else:
+                        self.conn = psycopg2.connect(
+                            POSTGRES_URL,
+                            connect_timeout=10,
+                        )
+                    self.backend = "postgres"
+                    self.param = "%s"
+                    print("Database backend: Supabase/Postgres")
+                    return
+                except Exception as exc:
+                    print(
+                        "Supabase/Postgres unavailable, "
+                        f"falling back to SQLite: {exc}"
                     )
 
-                self.conn = psycopg2.connect(
-                    POSTGRES_URL,
-                    **connect_kwargs
-                )
-                self.backend = "postgres"
-                self.param = "%s"
-                print("Database backend: Supabase/Postgres")
-                return
-            except Exception as exc:
+            elif POSTGRES_URL and psycopg2 is None:
                 print(
-                    "Supabase/Postgres unavailable, "
-                    f"falling back to SQLite: {exc}"
+                    "psycopg2-binary not installed; "
+                    "falling back to SQLite."
                 )
 
-        elif POSTGRES_URL and psycopg2 is None:
-            print(
-                "psycopg2-binary not installed; "
-                "falling back to SQLite."
+            self.conn = sqlite3.connect(
+                DB_PATH,
+                check_same_thread=False
             )
+            self.backend = "sqlite"
+            self.param = "?"
+            print(f"Database backend: SQLite ({DB_PATH})")
 
-        self.conn = sqlite3.connect(
-            DB_PATH,
-            check_same_thread=False
-        )
-        print(f"Database backend: SQLite ({DB_PATH})")
+    def ensure_connection(self):
+
+        if self.conn is None:
+            self.connect(force=True)
+            return
+
+        if self.backend != "postgres":
+            return
+
+        try:
+            if self.conn.closed != 0:
+                self.connect(force=True)
+                return
+
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            self.conn.rollback()
+        except Exception:
+            self.connect(force=True)
+
+    def rollback_quietly(self):
+
+        try:
+            if self.conn is not None:
+                self.conn.rollback()
+        except Exception:
+            pass
+
+    def run_query(self, query, params=(), fetch=False):
+
+        with self.lock:
+            last_exc = None
+
+            for attempt in range(2):
+                self.ensure_connection()
+                cursor = None
+
+                try:
+                    cursor = self.conn.cursor()
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall() if fetch else None
+                    self.conn.commit()
+                    return rows
+                except PSYCOPG_CONNECTION_ERRORS + (sqlite3.Error,) as exc:
+                    last_exc = exc
+                    self.rollback_quietly()
+
+                    if attempt == 0:
+                        print(f"Database connection issue, retrying once: {exc}")
+                        self.connect(force=True)
+                        continue
+
+                    raise
+                except Exception:
+                    self.rollback_quietly()
+                    raise
+                finally:
+                    try:
+                        if cursor is not None:
+                            cursor.close()
+                    except Exception:
+                        pass
+
+            if last_exc:
+                raise last_exc
+
+            return [] if fetch else None
 
     def create_table(self):
 
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        self.run_query(
             """
             CREATE TABLE IF NOT EXISTS orders (
                 supplier TEXT,
@@ -87,7 +193,7 @@ class Database:
             """
         )
 
-        cursor.execute(
+        self.run_query(
             """
             CREATE TABLE IF NOT EXISTS custom_products (
                 supplier TEXT,
@@ -98,35 +204,38 @@ class Database:
             """
         )
 
-        self.conn.commit()
         self.ensure_schema()
 
     def ensure_schema(self):
 
-        cursor = self.conn.cursor()
-
         if self.backend == "postgres":
-            cursor.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'orders'
-                """
-            )
-            columns = [row[0] for row in cursor.fetchall()]
+            columns = [
+                row[0]
+                for row in (self.run_query(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'orders'
+                    """,
+                    fetch=True,
+                ) or [])
+            ]
         else:
-            cursor.execute("PRAGMA table_info(orders)")
-            columns = [row[1] for row in cursor.fetchall()]
+            columns = [
+                row[1]
+                for row in (self.run_query(
+                    "PRAGMA table_info(orders)",
+                    fetch=True,
+                ) or [])
+            ]
 
         if 'unit' not in columns:
-            cursor.execute(
+            self.run_query(
                 "ALTER TABLE orders ADD COLUMN unit TEXT DEFAULT 'Pièce'"
             )
 
-        cursor.execute("DROP TABLE IF EXISTS stock")
-
-        self.conn.commit()
+        self.run_query("DROP TABLE IF EXISTS stock")
 
     def upsert(
         self,
@@ -136,9 +245,7 @@ class Database:
         unit='Pièce'
     ):
 
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        self.run_query(
             f"""
             INSERT INTO orders
             (supplier, product, qty, unit)
@@ -156,27 +263,20 @@ class Database:
             )
         )
 
-        self.conn.commit()
-
     def all(self):
 
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        return self.run_query(
             """
             SELECT supplier, product, qty, unit
             FROM orders
             ORDER BY supplier, product
-            """
+            """,
+            fetch=True,
         )
-
-        return cursor.fetchall()
 
     def delete_order(self, supplier, product):
 
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        self.run_query(
             f"""
             DELETE FROM orders
             WHERE supplier = {self.param} AND product = {self.param}
@@ -184,32 +284,28 @@ class Database:
             (supplier, product)
         )
 
-        self.conn.commit()
-
     def get_custom_products(self, supplier=None):
 
-        cursor = self.conn.cursor()
-
         if supplier:
-            cursor.execute(
+            rows = self.run_query(
                 f"""
                 SELECT product, image_filename
                 FROM custom_products
                 WHERE supplier = {self.param}
                 ORDER BY product
                 """,
-                (supplier,)
+                (supplier,),
+                fetch=True,
             )
         else:
-            cursor.execute(
+            rows = self.run_query(
                 """
                 SELECT supplier, product, image_filename
                 FROM custom_products
                 ORDER BY supplier, product
-                """
+                """,
+                fetch=True,
             )
-
-        rows = cursor.fetchall()
 
         if supplier:
             return [
@@ -217,7 +313,7 @@ class Database:
                     'product': row[0],
                     'image_filename': row[1]
                 }
-                for row in rows
+                for row in (rows or [])
             ]
 
         return [
@@ -226,14 +322,12 @@ class Database:
                 'product': row[1],
                 'image_filename': row[2]
             }
-            for row in rows
+            for row in (rows or [])
         ]
 
     def add_custom_product(self, supplier, product, image_filename=None):
 
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        self.run_query(
             f"""
             INSERT INTO custom_products
             (supplier, product, image_filename)
@@ -248,14 +342,8 @@ class Database:
             )
         )
 
-        self.conn.commit()
-
     def clear(self):
 
-        cursor = self.conn.cursor()
-
-        cursor.execute(
+        self.run_query(
             "DELETE FROM orders"
         )
-
-        self.conn.commit()

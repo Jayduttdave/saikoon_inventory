@@ -62,6 +62,22 @@ def find_image_path(filename):
     return None
 
 
+def safe_all_orders():
+    try:
+        return db.all()
+    except Exception as exc:
+        app.logger.exception("Failed to load orders: %s", exc)
+        return []
+
+
+def safe_custom_products(supplier=None):
+    try:
+        return db.get_custom_products(supplier)
+    except Exception as exc:
+        app.logger.exception("Failed to load custom products: %s", exc)
+        return []
+
+
 @app.route("/")
 def index():
     return render_template(
@@ -103,12 +119,12 @@ def api_products():
 
     custom_products = {
         cp["product"]: cp["image_filename"]
-        for cp in db.get_custom_products(supplier)
+        for cp in safe_custom_products(supplier)
     }
 
     all_orders = {
         (row[0], row[1]): (row[2], row[3] or "Pièce")
-        for row in db.all()
+        for row in (safe_all_orders() or [])
     }
 
     products = []
@@ -168,7 +184,11 @@ def api_order():
     if unit not in ["Carton", "Pièce"]:
         unit = "Pièce"
 
-    db.upsert(supplier, product, max(0, qty), unit)
+    try:
+        db.upsert(supplier, product, max(0, qty), unit)
+    except Exception as exc:
+        app.logger.exception("Failed to save order: %s", exc)
+        return jsonify({"error": "Impossible d'enregistrer la commande."}), 503
 
     return jsonify({"success": True})
 
@@ -177,17 +197,17 @@ def api_order():
 def api_owner_orders():
     query = request.args.get("query", "").strip().lower()
 
-    rows = db.all()
+    rows = safe_all_orders()
     orders = []
     custom_products = {}
 
-    for custom in db.get_custom_products():
+    for custom in safe_custom_products():
         supplier = custom["supplier"]
         product = custom["product"]
         image_filename = custom["image_filename"]
         custom_products.setdefault(supplier, {})[product] = image_filename
 
-    for supplier, product, qty, unit in rows:
+    for supplier, product, qty, unit in (rows or []):
         if qty <= 0:
             continue
 
@@ -225,7 +245,12 @@ def api_remove_order():
     if not supplier or not product:
         return jsonify({"error": "Fournisseur et produit requis."}), 400
 
-    db.delete_order(supplier, product)
+    try:
+        db.delete_order(supplier, product)
+    except Exception as exc:
+        app.logger.exception("Failed to delete order: %s", exc)
+        return jsonify({"error": "Impossible de supprimer la commande."}), 503
+
     return jsonify({"success": True})
 
 
@@ -250,22 +275,32 @@ def api_add_product():
         save_path = os.path.join(image_folder, filename)
         image_file.save(save_path)
 
-    db.add_custom_product(supplier, product, filename)
+    try:
+        db.add_custom_product(supplier, product, filename)
+    except Exception as exc:
+        app.logger.exception("Failed to add custom product: %s", exc)
+        return jsonify({"error": "Impossible d'ajouter le produit."}), 503
+
     return jsonify({"success": True})
 
 
 @app.route("/api/clear_orders", methods=["POST"])
 def api_clear_orders():
-    db.clear()
+    try:
+        db.clear()
+    except Exception as exc:
+        app.logger.exception("Failed to clear orders: %s", exc)
+        return jsonify({"error": "Impossible d'effacer les commandes."}), 503
+
     return jsonify({"success": True})
 
 
 @app.route("/download_pdf")
 def download_pdf():
-    rows = db.all()
+    rows = safe_all_orders()
     grouped = {}
 
-    for supplier, product, qty, unit in rows:
+    for supplier, product, qty, unit in (rows or []):
         if qty <= 0:
             continue
         grouped.setdefault(supplier, []).append((product, qty, unit or "Pièce"))
