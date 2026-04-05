@@ -295,6 +295,19 @@ def api_clear_orders():
     return jsonify({"success": True})
 
 
+@app.route("/api/order_history")
+def api_order_history():
+    limit = request.args.get("limit", default=100, type=int)
+
+    try:
+        history = db.get_order_history(limit=limit)
+    except Exception as exc:
+        app.logger.exception("Failed to load order history: %s", exc)
+        return jsonify({"error": "Impossible de charger l'historique."}), 503
+
+    return jsonify(history)
+
+
 @app.route("/download_pdf")
 def download_pdf():
     rows = safe_all_orders()
@@ -311,6 +324,15 @@ def download_pdf():
     file_path = generate_pdf_report(grouped)
 
     if file_path and os.path.exists(file_path):
+        try:
+            db.archive_rows(
+                rows,
+                action_type='pdf_downloaded',
+                note=os.path.basename(file_path),
+            )
+        except Exception as exc:
+            app.logger.exception("Failed to archive PDF history: %s", exc)
+
         return send_file(
             file_path,
             as_attachment=True,

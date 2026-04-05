@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import uuid
 from threading import RLock
 
 try:
@@ -204,6 +205,22 @@ class Database:
             """
         )
 
+        self.run_query(
+            """
+            CREATE TABLE IF NOT EXISTS order_history (
+                id TEXT PRIMARY KEY,
+                action_type TEXT NOT NULL,
+                supplier TEXT,
+                product TEXT,
+                qty INTEGER,
+                unit TEXT DEFAULT 'Pièce',
+                note TEXT,
+                batch_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         self.ensure_schema()
 
     def ensure_schema(self):
@@ -263,6 +280,14 @@ class Database:
             )
         )
 
+        self.log_history(
+            action_type='saved',
+            supplier=supplier,
+            product=product,
+            qty=qty,
+            unit=unit,
+        )
+
     def all(self):
 
         return self.run_query(
@@ -276,6 +301,16 @@ class Database:
 
     def delete_order(self, supplier, product):
 
+        existing = self.run_query(
+            f"""
+            SELECT supplier, product, qty, unit
+            FROM orders
+            WHERE supplier = {self.param} AND product = {self.param}
+            """,
+            (supplier, product),
+            fetch=True,
+        )
+
         self.run_query(
             f"""
             DELETE FROM orders
@@ -283,6 +318,16 @@ class Database:
             """,
             (supplier, product)
         )
+
+        if existing:
+            archived = existing[0]
+            self.log_history(
+                action_type='deleted',
+                supplier=archived[0],
+                product=archived[1],
+                qty=archived[2],
+                unit=archived[3] or 'Pièce',
+            )
 
     def get_custom_products(self, supplier=None):
 
@@ -342,8 +387,102 @@ class Database:
             )
         )
 
+    def log_history(
+        self,
+        action_type,
+        supplier='',
+        product='',
+        qty=0,
+        unit='Pièce',
+        note=None,
+        batch_id=None,
+    ):
+
+        try:
+            self.run_query(
+                f"""
+                INSERT INTO order_history
+                (id, action_type, supplier, product, qty, unit, note, batch_id)
+                VALUES (
+                    {self.param}, {self.param}, {self.param}, {self.param},
+                    {self.param}, {self.param}, {self.param}, {self.param}
+                )
+                """,
+                (
+                    uuid.uuid4().hex,
+                    action_type,
+                    supplier,
+                    product,
+                    qty,
+                    unit or 'Pièce',
+                    note,
+                    batch_id,
+                ),
+            )
+        except Exception as exc:
+            print(f"Order history log skipped: {exc}")
+
+    def archive_rows(self, rows, action_type, note=None, batch_id=None):
+
+        history_batch_id = batch_id or uuid.uuid4().hex
+
+        for supplier, product, qty, unit in (rows or []):
+            self.log_history(
+                action_type=action_type,
+                supplier=supplier,
+                product=product,
+                qty=qty,
+                unit=unit or 'Pièce',
+                note=note,
+                batch_id=history_batch_id,
+            )
+
+        return history_batch_id
+
+    def get_order_history(self, limit=200):
+
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 200
+
+        limit = max(1, min(limit, 1000))
+
+        rows = self.run_query(
+            f"""
+            SELECT action_type, supplier, product, qty, unit, note, batch_id, created_at
+            FROM order_history
+            ORDER BY created_at DESC, id DESC
+            LIMIT {self.param}
+            """,
+            (limit,),
+            fetch=True,
+        )
+
+        return [
+            {
+                'action_type': row[0],
+                'supplier': row[1],
+                'product': row[2],
+                'qty': row[3],
+                'unit': row[4],
+                'note': row[5],
+                'batch_id': row[6],
+                'created_at': row[7],
+            }
+            for row in (rows or [])
+        ]
+
     def clear(self):
+
+        existing_rows = self.all()
 
         self.run_query(
             "DELETE FROM orders"
+        )
+
+        self.archive_rows(
+            existing_rows,
+            action_type='cleared',
+            note='All active orders cleared',
         )
