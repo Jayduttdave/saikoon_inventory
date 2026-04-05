@@ -116,6 +116,10 @@
 
     let activeSupplier = suppliers[0] || '';
     let ordersCache = [];
+    const pendingOrderTimers = new Map();
+    const pendingOrderPayloads = new Map();
+    const inFlightOrderKeys = new Set();
+    let refreshOrdersTimeout;
 
     function createElement(tag, options = {}) {
       const el = document.createElement(tag);
@@ -177,14 +181,124 @@
       return response.json();
     }
 
-    async function updateOrder(product, qtyValue, unit) {
-      const quantity = Number(qtyInputValue(qtyValue));
-      await fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supplier: activeSupplier, product, qty: quantity, unit }),
+    function makeOrderKey(supplier, product) {
+      return `${supplier}::${product}`;
+    }
+
+    function updateProductCardState(productName, qty, unit) {
+      const cards = productList.querySelectorAll('.item-card');
+      for (const card of cards) {
+        if (card.dataset.productName !== productName) continue;
+        const subtitle = card.querySelector('.item-subtitle');
+        if (subtitle) {
+          subtitle.textContent = `Quantité commandée : ${qty} ${unit}`;
+        }
+      }
+    }
+
+    function updateOrdersCacheEntry(supplier, product, qty, unit, image) {
+      const index = ordersCache.findIndex((item) => item.supplier === supplier && item.product === product);
+
+      if (qty > 0) {
+        const nextItem = {
+          supplier,
+          product,
+          qty,
+          unit,
+          image: image || ordersCache[index]?.image || '',
+        };
+
+        if (index >= 0) {
+          ordersCache[index] = { ...ordersCache[index], ...nextItem };
+        } else {
+          ordersCache.unshift(nextItem);
+        }
+      } else if (index >= 0) {
+        ordersCache.splice(index, 1);
+      }
+
+      renderOrderCards();
+    }
+
+    function scheduleOrdersRefresh(delay = 200) {
+      clearTimeout(refreshOrdersTimeout);
+      refreshOrdersTimeout = window.setTimeout(() => {
+        refreshOrders(true);
+      }, delay);
+    }
+
+    async function flushAllPendingOrders() {
+      const keys = Array.from(new Set([
+        ...pendingOrderTimers.keys(),
+        ...pendingOrderPayloads.keys(),
+      ]));
+
+      keys.forEach((key) => {
+        if (pendingOrderTimers.has(key)) {
+          clearTimeout(pendingOrderTimers.get(key));
+          pendingOrderTimers.delete(key);
+        }
       });
-      await refreshOrders();
+
+      await Promise.all(keys.map((key) => flushOrderUpdate(key)));
+    }
+
+    async function flushOrderUpdate(key) {
+      const payload = pendingOrderPayloads.get(key);
+      if (!payload || inFlightOrderKeys.has(key)) {
+        return;
+      }
+
+      inFlightOrderKeys.add(key);
+
+      try {
+        const response = await fetch('/api/order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          keepalive: true,
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          throw new Error('Order save failed');
+        }
+
+        if (pendingOrderPayloads.get(key) === payload) {
+          pendingOrderPayloads.delete(key);
+        }
+
+        scheduleOrdersRefresh(150);
+      } catch (error) {
+        console.error('Erreur sauvegarde commande:', error);
+        await refreshOrders();
+        await loadProducts();
+      } finally {
+        inFlightOrderKeys.delete(key);
+
+        const latestPayload = pendingOrderPayloads.get(key);
+        if (latestPayload && latestPayload !== payload) {
+          window.setTimeout(() => flushOrderUpdate(key), 0);
+        }
+      }
+    }
+
+    function updateOrder(product, qtyValue, unit, image = '') {
+      const quantity = Number(qtyInputValue(qtyValue));
+      const supplier = activeSupplier;
+      const key = makeOrderKey(supplier, product);
+
+      updateOrdersCacheEntry(supplier, product, quantity, unit, image);
+      updateProductCardState(product, quantity, unit);
+      pendingOrderPayloads.set(key, { supplier, product, qty: quantity, unit });
+
+      if (pendingOrderTimers.has(key)) {
+        clearTimeout(pendingOrderTimers.get(key));
+      }
+
+      pendingOrderTimers.set(key, window.setTimeout(() => {
+        pendingOrderTimers.delete(key);
+        flushOrderUpdate(key);
+      }, 160));
     }
 
     function createQtyControl(product) {
@@ -234,9 +348,9 @@
         return quantity;
       }
 
-      async function changeQuantity(delta) {
+      function changeQuantity(delta) {
         const next = syncQuantity(Number(qtyInput.value) + delta);
-        await updateOrder(product.name, next, getActiveUnit());
+        updateOrder(product.name, next, getActiveUnit(), product.image);
       }
 
       let repeatTimeout;
@@ -276,21 +390,21 @@
       plusButton.addEventListener('pointerleave', stopRepeat);
       plusButton.addEventListener('pointercancel', stopRepeat);
 
-      qtyInput.addEventListener('change', async () => {
+      qtyInput.addEventListener('change', () => {
         const value = syncQuantity(qtyInput.value);
-        await updateOrder(product.name, value, getActiveUnit());
+        updateOrder(product.name, value, getActiveUnit(), product.image);
       });
 
-      cartonButton.addEventListener('click', async () => {
+      cartonButton.addEventListener('click', () => {
         cartonButton.classList.add('active');
         pieceButton.classList.remove('active');
-        await updateOrder(product.name, qtyInput.value, 'Carton');
+        updateOrder(product.name, qtyInput.value, 'Carton', product.image);
       });
 
-      pieceButton.addEventListener('click', async () => {
+      pieceButton.addEventListener('click', () => {
         pieceButton.classList.add('active');
         cartonButton.classList.remove('active');
-        await updateOrder(product.name, qtyInput.value, 'Pièce');
+        updateOrder(product.name, qtyInput.value, 'Pièce', product.image);
       });
 
       qtyControl.append(minusButton, qtyInput, plusButton);
@@ -314,6 +428,7 @@
 
         for (const product of products) {
           const card = createElement('div', { className: 'item-card' });
+          card.dataset.productName = product.name;
           const imageWrapper = createElement('div', { className: 'item-avatar' });
           const image = createElement('img', { attrs: { src: product.image, alt: product.name } });
           imageWrapper.appendChild(image);
@@ -397,14 +512,18 @@
       }
     }
 
-    async function refreshOrders() {
+    async function refreshOrders(silent = false) {
       try {
-        orderList.innerHTML = '<div class="loading-card">Chargement des commandes...</div>';
+        if (!silent && !ordersCache.length) {
+          orderList.innerHTML = '<div class="loading-card">Chargement des commandes...</div>';
+        }
         ordersCache = await fetchOrders();
         renderOrderCards();
       } catch (error) {
         console.error('Erreur chargement commandes:', error);
-        orderList.innerHTML = '<div class="empty-state">Impossible de charger les commandes.</div>';
+        if (!silent || !ordersCache.length) {
+          orderList.innerHTML = '<div class="empty-state">Impossible de charger les commandes.</div>';
+        }
       }
     }
 
@@ -536,6 +655,7 @@
 
     downloadPdf.addEventListener('click', async () => {
       try {
+        await flushAllPendingOrders();
         const response = await fetch('/download_pdf');
         if (!response.ok) {
           const payload = await response.json().catch(() => null);
@@ -562,6 +682,7 @@
     });
 
     clearOrders.addEventListener('click', async () => {
+      await flushAllPendingOrders();
       await fetch('/api/clear_orders', { method: 'POST' });
       await refreshOrders();
       await loadProducts();
@@ -573,7 +694,7 @@
       await loadProducts();
       await refreshOrders();
       updateArrows();
-      setInterval(refreshOrders, 3000);
+      setInterval(() => refreshOrders(true), 5000);
     }
 
     init();
